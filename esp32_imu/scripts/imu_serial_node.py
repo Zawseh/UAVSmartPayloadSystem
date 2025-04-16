@@ -134,7 +134,7 @@ smooth_tension = tension_smoother()
 
 
 def estimate_object_position(swiv_pitch, swiv_roll, base_pitch=0.0, base_roll=0.0,
-                             tether_length=2.0, base_influence=0.2):
+                             tether_length=5, base_influence=0.2):
 
     swiv_pitch_rad = math.radians(swiv_pitch)
     swiv_roll_rad = math.radians(swiv_roll)
@@ -163,6 +163,7 @@ def read_imu_tension_data():
     rospy.init_node("imu_serial_node", anonymous=True)
     imu_pub = rospy.Publisher("/imu_tension_data", ImuWithTension, queue_size=10)
     last_tension = 0.0 
+    val_length = 0
 
     try:
         ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
@@ -176,37 +177,67 @@ def read_imu_tension_data():
                 if len(values) == 8:  # imu and tension
                     az, gx, gy, gz, gx2, gy2, gz2, tension = map(float, values)
                     last_tension = tension
+                    val_length = 8
 
                 elif len(values) == 7:  #imu if tension fails to send, uses last tension value for fallback
                     az, gx, gy, gz, gx2, gy2, gz2 = map(float, values)
                     tension = last_tension
+                    val_length = 8
+
+                elif len(values) == 4:
+                    gx2, gy2, gz2, tension = map(float,values)
+                    last_tension = tension
+                    val_length = 4
+
+                elif len(values) == 3:
+                    gx2, gy2, gz2 = map(float,values)
+                    tension = last_tension
+                    val_length = 4
 
                 else:
                     rospy.logwarn(f"Incorrect data format ({len(values)} values): {line}")
                     continue
                 
                 
+                if val_length == 8:
+                    smoothed_pitch, smoothed_roll = smooth_imu(gy, gz)
+                    x_pred, y_pred, z_pred = estimate_object_position(gy2, gz2, smoothed_pitch, smoothed_roll)
 
-                smoothed_pitch, smoothed_roll = smooth_imu(gy, gz)
-                x_pred, y_pred, z_pred = estimate_object_position(gy2, gz2, smoothed_pitch, smoothed_roll)
+                    imu_msg = ImuWithTension()
+                    imu_msg.header.stamp = rospy.Time.now()
+                    imu_msg.header.frame_id = "imu_tension_link"
 
-                imu_msg = ImuWithTension()
-                imu_msg.header.stamp = rospy.Time.now()
-                imu_msg.header.frame_id = "imu_tension_link"
+                    imu_msg.swiv_pitch = gy2
+                    imu_msg.swiv_roll = gz2
 
-                imu_msg.swiv_pitch = gy2
-                imu_msg.swiv_roll = gz2
+                    imu_msg.base_pitch = smoothed_pitch
+                    imu_msg.base_roll = smoothed_roll
+                    imu_msg.tension_value = filter_fn(tension)
+                    smoothed_val = compensate_tension(tension,smoothed_pitch,smoothed_roll)
+                    imu_msg.compensated_tension = smooth_tension(smoothed_val)
+                    imu_msg.predict_yaw = x_pred
+                    imu_msg.predict_pitch = y_pred
+                    imu_msg.predict_roll = z_pred
+                    imu_pub.publish(imu_msg)
+                else:
+                    x_pred, y_pred, z_pred = estimate_object_position(gy2, gz2, 0,0)
 
-                imu_msg.base_pitch = smoothed_pitch
-                imu_msg.base_roll = smoothed_roll
-                imu_msg.tension_value = filter_fn(tension)
-                #filter_fn(compensate_tension(tension,gy,gz))
-                smoothed_val = compensate_tension(tension,smoothed_pitch,smoothed_roll)
-                imu_msg.compensated_tension = smooth_tension(smoothed_val)
-                imu_msg.predict_yaw = x_pred
-                imu_msg.predict_pitch = y_pred
-                imu_msg.predict_roll = z_pred
-                imu_pub.publish(imu_msg)
+                    imu_msg = ImuWithTension()
+                    imu_msg.header.stamp = rospy.Time.now()
+                    imu_msg.header.frame_id = "imu_tension_link"
+
+                    imu_msg.swiv_pitch = gy2
+                    imu_msg.swiv_roll = gz2
+
+                    imu_msg.base_pitch = 0
+                    imu_msg.base_roll = 0
+                    imu_msg.tension_value = filter_fn(tension)
+                    imu_msg.compensated_tension = smooth_tension(tension)
+                    imu_msg.predict_yaw = x_pred
+                    imu_msg.predict_pitch = y_pred
+                    imu_msg.predict_roll = z_pred
+                    imu_pub.publish(imu_msg)
+
 
             except Exception as e:
                 rospy.logwarn(f"error {e}")

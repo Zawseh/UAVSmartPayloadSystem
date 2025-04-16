@@ -1,0 +1,10 @@
+Header header
+float32 base_pitch
+float32 base_roll
+float32 swiv_pitch
+float32 swiv_roll
+float32 predict_yaw
+float32 predict_pitch
+float32 predict_roll
+float32 tension_value
+float32 compensated_tension
